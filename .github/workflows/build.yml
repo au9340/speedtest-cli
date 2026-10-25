@@ -1,33 +1,62 @@
 name: Build
-
 on:
   push:
-    branches:
-      - master
-  pull_request:
+  workflow_dispatch:
 
 jobs:
-  go:
-    name: Go build
+  test:
+    name: Go vet & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-
-      - name: Build
-        run: ./build.sh ci
-
-      - name: Smoke test
-        run: ./out/librespeed-cli-linux-amd64 --version
-
       - name: Vet
         run: go vet ./...
-
       - name: Test
         run: go test ./...
+
+  release:
+    name: Release build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux-amd64
+          - linux-386
+          - linux-arm64
+          - windows-amd64
+          - darwin-amd64
+          - darwin-arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build release binary
+        run: |
+          GOOS="${TARGET%-*}"
+          GOARCH="${TARGET#*-}"
+          VER="$(git describe --tags --always 2>/dev/null || echo dev)"
+          DATE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          LDFLAGS="-w -s -X github.com/librespeed/speedtest-cli/defs.ProgName=librespeed-cli -X github.com/librespeed/speedtest-cli/defs.ProgVersion=${VER} -X github.com/librespeed/speedtest-cli/defs.BuildDate=${DATE}"
+          EXE=""
+          [ "${GOOS}" = "windows" ] && EXE=".exe"
+          mkdir -p out
+          go build -o "out/librespeed-cli-${GOOS}-${GOARCH}${EXE}" -ldflags "${LDFLAGS}" -trimpath main.go
+        env:
+          TARGET: ${{ matrix.target }}
+      - name: Smoke test
+        if: matrix.target == 'linux-amd64'
+        run: ./out/librespeed-cli-linux-amd64 --version
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: librespeed-cli-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
 
   docker:
     name: Docker build
@@ -36,9 +65,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Build image
         run: docker build -t librespeed-cli .
-
       - name: Smoke test image
         run: docker run --rm librespeed-cli --version
