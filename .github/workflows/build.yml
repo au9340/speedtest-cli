@@ -60,9 +60,53 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: librespeed-cli-${{ steps.version.outputs.VER }}-${{ matrix.target }}
+          name: librespeed-cli-${{ matrix.target }}
           path: out/*
           if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve version
+        id: version
+        run: |
+          VER="$(date -u +'%Y.%m.%d')-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
+          echo "VER=${VER}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Package and checksum
+        run: |
+          mkdir -p release
+          cp -f dist/* release/
+          (cd release && sha256sum * | tee SHA256SUMS.txt)
+      - name: Check release exists
+        id: check
+        run: |
+          TAG="v${{ steps.version.outputs.VER }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VER }}
+          name: v${{ steps.version.outputs.VER }}
+          body: |
+            Auto-built release from push to master.
+            - Version: v${{ steps.version.outputs.VER }}
+            - Platforms: linux (amd64/386/arm64), windows (amd64), darwin (amd64/arm64)
+            - Checksums: see SHA256SUMS.txt
+          files: release/*
 
   docker:
     name: Docker build
