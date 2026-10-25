@@ -35,11 +35,20 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Resolve version
+        id: version
+        run: |
+          if VER="$(git describe --tags --dirty 2>/dev/null)"; then
+            :
+          else
+            VER="dev-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+          fi
+          echo "VER=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VER}" >> "$GITHUB_STEP_SUMMARY"
       - name: Build release binary
         run: |
           GOOS="${TARGET%-*}"
           GOARCH="${TARGET#*-}"
-          VER="$(git describe --tags --always 2>/dev/null || echo dev)"
           DATE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           LDFLAGS="-w -s -X github.com/librespeed/speedtest-cli/defs.ProgName=librespeed-cli -X github.com/librespeed/speedtest-cli/defs.ProgVersion=${VER} -X github.com/librespeed/speedtest-cli/defs.BuildDate=${DATE}"
           EXE=""
@@ -48,13 +57,14 @@ jobs:
           go build -o "out/librespeed-cli-${GOOS}-${GOARCH}${EXE}" -ldflags "${LDFLAGS}" -trimpath main.go
         env:
           TARGET: ${{ matrix.target }}
+          VER: ${{ steps.version.outputs.VER }}
       - name: Smoke test
         if: matrix.target == 'linux-amd64'
         run: ./out/librespeed-cli-linux-amd64 --version
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: librespeed-cli-${{ matrix.target }}
+          name: librespeed-cli-${{ steps.version.outputs.VER }}-${{ matrix.target }}
           path: out/*
           if-no-files-found: error
 
