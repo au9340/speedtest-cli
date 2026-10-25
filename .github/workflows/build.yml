@@ -43,8 +43,11 @@ jobs:
           echo "Resolved version: ${VER}" >> "$GITHUB_STEP_SUMMARY"
       - name: Build release binary
         run: |
-          GOOS="${TARGET%-*}"
-          GOARCH="${TARGET#*-}"
+          # export so the go toolchain (a child process) actually sees them;
+          # plain assignment only affects the file name in this shell and go
+          # would build every target as the runner's default GOOS/GOARCH.
+          export GOOS="${TARGET%-*}"
+          export GOARCH="${TARGET#*-}"
           DATE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           LDFLAGS="-w -s -X \"github.com/librespeed/speedtest-cli/defs.ProgName=librespeed-cli\" -X \"github.com/librespeed/speedtest-cli/defs.ProgVersion=${VER}\" -X \"github.com/librespeed/speedtest-cli/defs.BuildDate=${DATE}\""
           EXE=""
