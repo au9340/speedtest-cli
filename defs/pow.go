@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -65,6 +66,11 @@ func (s *Server) clearProofOfWork() error {
 	primeSiteCookie(dir)
 	challenge, err := fetchPowChallenge(dir)
 	if err != nil {
+		// A backend without a gate answers 404; remember that so the probe is
+		// not repeated for every phase of the test.
+		if errors.Is(err, errPowUnsupported) {
+			powSolved.Store(key, struct{}{})
+		}
 		return err
 	}
 	nonce, err := solvePowChallenge(challenge.Challenge, challenge.Difficulty)
@@ -79,6 +85,18 @@ func (s *Server) clearProofOfWork() error {
 	output.WriteDebug("Proof of work cleared for %s in %s\n",
 		output.Sanitize(key), time.Since(start).Round(time.Millisecond))
 	return nil
+}
+
+// clearPowIfSupported clears the backend's proof-of-work gate when it publishes
+// one, and is a no-op for backends that do not. It is safe to call before every
+// measurement phase: a solved gate is remembered per backend directory, and a
+// backend without a gate is remembered after a single 404 probe.
+func (s *Server) clearPowIfSupported() error {
+	err := s.clearProofOfWork()
+	if errors.Is(err, errPowUnsupported) {
+		return nil
+	}
+	return err
 }
 
 func powLock(key string) *sync.Mutex {

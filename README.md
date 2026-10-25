@@ -18,6 +18,7 @@ This is a command line interface for LibreSpeed speed test backends, written in 
 - Test with multiple servers in a single run
 - Use your own server list or telemetry endpoints
 - Tested with PHP and Go backends
+- Automatic clearing of proof-of-work gates (pow.php / pow_verify.php) on gated backends
 
 [![asciicast](https://asciinema.org/a/J17bUAilWI3qR12JyhfGvPwu2.svg)](https://asciinema.org/a/J17bUAilWI3qR12JyhfGvPwu2)
 

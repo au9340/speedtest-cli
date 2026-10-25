@@ -19,6 +19,12 @@ func getIPResultFromPayload(t *testing.T, payload string) *GetIPResult {
 	t.Helper()
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Backends without a proof-of-work gate answer the gate endpoints 404;
+		// GetIPInfo probes them to learn there is no gate.
+		if strings.HasSuffix(r.URL.Path, "pow.php") || strings.HasSuffix(r.URL.Path, "pow_verify.php") {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(payload))
 	}))
@@ -124,7 +130,23 @@ func librespeedRSLikeServer(t *testing.T) (*Server, *atomic.Int64, *atomic.Int64
 						return
 					}
 					if !strings.HasPrefix(strings.ToLower(status), "post ") {
-						return
+						// The proof-of-work pre-flight issues GETs for the
+						// site root and pow.php; answer them 404 like a
+						// backend without a gate, draining the headers so
+						// the connection stays in sync.
+						for {
+							line, err := br.ReadString('\n')
+							if err != nil {
+								return
+							}
+							if strings.TrimRight(line, "\r\n") == "" {
+								break
+							}
+						}
+						if _, err := conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")); err != nil {
+							return
+						}
+						continue
 					}
 					cl := int64(0)
 					chunked := false
