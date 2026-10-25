@@ -38,11 +38,7 @@ jobs:
       - name: Resolve version
         id: version
         run: |
-          if VER="$(git describe --tags --dirty 2>/dev/null)"; then
-            :
-          else
-            VER="dev-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-          fi
+          VER="$(date -u +'%Y.%m.%d')-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
           echo "VER=${VER}" >> "$GITHUB_OUTPUT"
           echo "Resolved version: ${VER}" >> "$GITHUB_STEP_SUMMARY"
       - name: Build release binary
