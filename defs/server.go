@@ -62,14 +62,19 @@ func (s *Server) IsUp() bool {
 	u, _ := s.GetURL()
 	u.Path = path.Join(u.Path, s.PingURL)
 
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		output.WriteDebug("Failed when creating HTTP request: %s\n", err)
-		return false
+	// Backends may sit behind a proof-of-work gate (pow.php / pow_verify.php)
+	// that answers a short, non-HTML body instead of the empty ping response.
+	// Detect the gate and solve it before declaring the backend dead.
+	fetch := func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", UserAgent)
+		return http.DefaultClient.Do(req)
 	}
-	req.Header.Set("User-Agent", UserAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetch()
 	if err != nil {
 		output.WriteDebug("Error checking for server status: %s\n", err)
 		return false
@@ -98,10 +103,29 @@ func (s *Server) IsUp() bool {
 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil || len(b) > 0 {
-		// %q rather than Sanitize: this is a raw response body where newlines are
-		// legitimate, and quoting escapes control chars without losing them
-		output.WriteDebug("Failed when parsing get IP result: %q\n", b)
-		return false
+		// A gated backend answers the ping URL with a short non-HTML body.
+		// Solve the proof of work and retry once. Without a gate a non-empty
+		// body fails either way, so this cannot resurrect a dead server.
+		if gateBody(b) {
+			output.WriteDebug("Server %s answered a proof-of-work gate, solving it\n", output.Sanitize(s.Name))
+			if gerr := s.clearProofOfWork(); gerr != nil {
+				output.WriteDebug("Failed to clear proof of work for %s: %s\n", output.Sanitize(s.Name), gerr)
+				return false
+			}
+			// ask once more, this time with the gate cleared
+			if resp, err = fetch(); err != nil {
+				output.WriteDebug("Error checking for server status: %s\n", err)
+				return false
+			}
+			defer resp.Body.Close()
+			b, err = io.ReadAll(resp.Body)
+		}
+		if err != nil || len(b) > 0 {
+			// %q rather than Sanitize: this is a raw response body where newlines are
+			// legitimate, and quoting escapes control chars without losing them
+			output.WriteDebug("Failed when parsing get IP result: %q\n", b)
+			return false
+		}
 	}
 	// only return online if the ping URL returns nothing and 200
 	return resp.StatusCode == http.StatusOK
@@ -258,6 +282,7 @@ func (s *Server) PingAndJitter(count int) (float64, float64, error) {
 		},
 	}))
 
+	var retriedGate bool
 	for i := 0; i < count; i++ {
 		start := time.Now()
 		resp, err := http.DefaultClient.Do(req)
@@ -265,9 +290,27 @@ func (s *Server) PingAndJitter(count int) (float64, float64, error) {
 			output.WriteDebug("Failed when making HTTP request: %s\n", err)
 			return 0, 0, err
 		}
-		io.Copy(io.Discard, resp.Body)
+		b, rerr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if rerr != nil {
+			output.WriteDebug("Failed when reading HTTP response: %s\n", rerr)
+			return 0, 0, rerr
+		}
 		end := time.Now()
+
+		// A backend behind a proof-of-work gate answers the ping URL with a
+		// short non-HTML body. Solve the gate and start the series over, so
+		// the gated round trip is not counted as a ping.
+		if i == 0 && !retriedGate && gateBody(b) {
+			output.WriteDebug("Server %s answered a proof-of-work gate, solving it\n", output.Sanitize(s.Name))
+			if gerr := s.clearProofOfWork(); gerr != nil {
+				output.WriteDebug("Failed to clear proof of work for %s: %s\n", output.Sanitize(s.Name), gerr)
+				return 0, 0, gerr
+			}
+			retriedGate = true
+			i = -1
+			continue
+		}
 
 		pings = append(pings, rttMillis(end.Sub(start)))
 	}
@@ -345,6 +388,13 @@ func (s *Server) Download(silent bool, useBytes, useMebi bool, requests int, chu
 	defer func() {
 		s.TLog.Logf("Download took %s", time.Since(t).String())
 	}()
+
+	// A backend may sit behind a proof-of-work gate; clear it before the first
+	// stream so the measured bytes are the test's, not the gate's.
+	if err := s.clearPowIfSupported(); err != nil {
+		output.WriteDebug("Failed to clear proof of work for %s: %s\n", output.Sanitize(s.Name), err)
+		return 0, 0, err
+	}
 
 	counter := NewCounter()
 	counter.SetMebi(useMebi)
@@ -466,6 +516,13 @@ func (s *Server) Upload(noPrealloc, silent, useBytes, useMebi bool, requests int
 	defer func() {
 		s.TLog.Logf("Upload took %s", time.Since(t).String())
 	}()
+
+	// A backend may sit behind a proof-of-work gate; clear it before the first
+	// upload so the payload is not rejected by the gate.
+	if err := s.clearPowIfSupported(); err != nil {
+		output.WriteDebug("Failed to clear proof of work for %s: %s\n", output.Sanitize(s.Name), err)
+		return 0, 0, err
+	}
 
 	counter := NewCounter()
 	counter.SetMebi(useMebi)
@@ -615,6 +672,13 @@ func (s *Server) GetIPInfo(distanceUnit string) (*GetIPResult, error) {
 	defer func() {
 		s.TLog.Logf("Get IP info took %s", time.Since(t).String())
 	}()
+
+	// Clear a proof-of-work gate before asking the backend who we are; a gated
+	// getIP response would otherwise be reported as the client address.
+	if err := s.clearPowIfSupported(); err != nil {
+		output.WriteDebug("Failed to clear proof of work for %s: %s\n", output.Sanitize(s.Name), err)
+		return nil, err
+	}
 
 	var ipInfo GetIPResult
 	u, err := s.GetURL()
