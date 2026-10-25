@@ -50,7 +50,7 @@ jobs:
           GOOS="${TARGET%-*}"
           GOARCH="${TARGET#*-}"
           DATE="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          LDFLAGS="-w -s -X github.com/librespeed/speedtest-cli/defs.ProgName=librespeed-cli -X github.com/librespeed/speedtest-cli/defs.ProgVersion=${VER} -X github.com/librespeed/speedtest-cli/defs.BuildDate=${DATE}"
+          LDFLAGS="-w -s -X \"github.com/librespeed/speedtest-cli/defs.ProgName=librespeed-cli\" -X \"github.com/librespeed/speedtest-cli/defs.ProgVersion=${VER}\" -X \"github.com/librespeed/speedtest-cli/defs.BuildDate=${DATE}\""
           EXE=""
           [ "${GOOS}" = "windows" ] && EXE=".exe"
           mkdir -p out
