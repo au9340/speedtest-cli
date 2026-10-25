@@ -27,6 +27,7 @@ jobs:
           - linux-amd64
           - linux-386
           - linux-arm64
+          - android-arm64
           - windows-amd64
           - darwin-amd64
           - darwin-arm64
@@ -53,10 +54,27 @@ jobs:
           EXE=""
           [ "${GOOS}" = "windows" ] && EXE=".exe"
           mkdir -p out
-          go build -o "out/librespeed-cli-${GOOS}-${GOARCH}${EXE}" -ldflags "${LDFLAGS}" -trimpath main.go
+          # Package mode, not file mode: `go build main.go` would silently ignore
+          # any other file added to package main.
+          go build -o "out/librespeed-cli-${GOOS}-${GOARCH}${EXE}" -ldflags "${LDFLAGS}" -trimpath .
         env:
+          # Never inherit cgo: a native target would link the runner's glibc,
+          # and android/arm64 would need the NDK. Keep every artifact a static,
+          # pure-Go binary so all targets behave the same on the wire.
+          CGO_ENABLED: "0"
           TARGET: ${{ matrix.target }}
           VER: ${{ steps.version.outputs.VER }}
+      - name: Verify artifact matches its target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          EXE=""
+          [ "${TARGET%%-*}" = "windows" ] && EXE=".exe"
+          BIN="out/librespeed-cli-${TARGET}${EXE}"
+          go version -m "${BIN}" | sed -n '1p;/^[[:space:]]*build/p'
+          go version -m "${BIN}" | grep -q "GOOS=${TARGET%-*}$" || { echo "::error file=${BIN}::GOOS does not match target ${TARGET}"; exit 1; }
+          go version -m "${BIN}" | grep -q "GOARCH=${TARGET#*-}$" || { echo "::error file=${BIN}::GOARCH does not match target ${TARGET}"; exit 1; }
+
       - name: Smoke test
         if: matrix.target == 'linux-amd64'
         run: ./out/librespeed-cli-linux-amd64 --version
@@ -70,6 +88,8 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: release
+    # A push to any branch used to cut a release; only master should.
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,7 +127,7 @@ jobs:
           body: |
             Auto-built release from push to master.
             - Version: v${{ steps.version.outputs.VER }}
-            - Platforms: linux (amd64/386/arm64), windows (amd64), darwin (amd64/arm64)
+            - Platforms: linux (amd64/386/arm64), android (arm64), windows (amd64), darwin (amd64/arm64)
             - Checksums: see SHA256SUMS.txt
           files: release/*
 

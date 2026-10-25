@@ -63,7 +63,9 @@ func (s *Server) clearProofOfWork() error {
 		return nil
 	}
 	enablePowCookieJar()
-	primeSiteCookie(dir)
+	// Priming is best effort until a gate is known to exist: a backend without
+	// one must not fail the whole run because its site root is unreachable.
+	primeErr := primeSiteCookie(dir)
 	challenge, err := fetchPowChallenge(dir)
 	if err != nil {
 		// A backend without a gate answers 404; remember that so the probe is
@@ -72,6 +74,9 @@ func (s *Server) clearProofOfWork() error {
 			powSolved.Store(key, struct{}{})
 		}
 		return err
+	}
+	if primeErr != nil {
+		return primeErr
 	}
 	nonce, err := solvePowChallenge(challenge.Challenge, challenge.Difficulty)
 	if err != nil {
@@ -151,25 +156,25 @@ func powEndpoint(dir *url.URL, file string) *url.URL {
 	return &u
 }
 
-func primeSiteCookie(dir *url.URL) {
+func primeSiteCookie(dir *url.URL) error {
 	root := *dir
 	root.Path = "/"
 	root.RawQuery = ""
 	root.Fragment = ""
 	req, err := http.NewRequest(http.MethodGet, root.String(), nil)
 	if err != nil {
-		return
+		return err
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Cache-Control", "no-store")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		output.WriteDebug("Cannot fetch %s to prime the site cookie: %s\n",
+		return fmt.Errorf("cannot fetch %s to prime the site cookie: %w",
 			output.Sanitize(root.String()), err)
-		return
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	return nil
 }
 
 func fetchPowChallenge(dir *url.URL) (*powChallenge, error) {
